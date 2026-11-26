@@ -7,31 +7,43 @@ import makeWASocket, {
   jidNormalizedUser
 } from '@xbibzlibrary/whatsbibz';
 
-import QRCode from 'qrcode';
-
 async function startBot() {
   const { state, saveCreds } =
     await useMultiFileAuthState('auth');
+
+  const phoneNumber = (process.env.WHATSAPP_PHONE || '')
+    .replace(/\D/g, '');
 
   const sock = makeWASocket({
     auth: state,
     autoFollowChannel: false
   });
 
+  let pairingRequested = false;
+
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
-      console.log('\n=== SCAN QR WHATSAPP INI ===\n');
-      console.log(
-        await QRCode.toString(qr, {
-          type: 'terminal',
-          small: true
-        })
-      );
-      console.log('\n=== AKHIR QR ===\n');
+    if (qr && !state.creds.registered) {
+      if (!phoneNumber) {
+        console.log('Nomor belum diatur. Tambahkan WHATSAPP_PHONE di Railway.');
+      } else if (!pairingRequested) {
+        pairingRequested = true;
+
+        try {
+          const code = await sock.requestPairingCode(phoneNumber);
+
+          console.log('\n==============================');
+          console.log('KODE PAIRING WHATSAPP:');
+          console.log(code);
+          console.log('==============================\n');
+          console.log('Masukkan kode tersebut di WhatsApp.');
+        } catch (error) {
+          console.error('Gagal meminta kode pairing:', error?.message || error);
+        }
+      }
     }
 
     if (connection === 'open') {
