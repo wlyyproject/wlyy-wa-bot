@@ -1,25 +1,11 @@
 
 import makeWASocket, {
   useMultiFileAuthState,
-  jidNormalizedUser,
+  DisconnectReason,
   downloadVideoForSoundSticker,
-  sendVideoAsSoundSticker
+  sendVideoAsSoundSticker,
+  jidNormalizedUser
 } from '@xbibzlibrary/whatsbibz';
-
-function unwrapMessage(content) {
-  while (content) {
-    const wrapped =
-      content.ephemeralMessage?.message ||
-      content.viewOnceMessage?.message ||
-      content.viewOnceMessageV2?.message ||
-      content.documentWithCaptionMessage?.message;
-
-    if (!wrapped) break;
-    content = wrapped;
-  }
-
-  return content;
-}
 
 async function startBot() {
   const { state, saveCreds } =
@@ -27,18 +13,29 @@ async function startBot() {
 
   const sock = makeWASocket({
     auth: state,
-    autoFollowChannel: false
+    autoFollowChannel: false,
+    printQRInTerminal: true
   });
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', ({ connection }) => {
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect } = update;
+
     if (connection === 'open') {
-      console.log('Bot WhatsApp berhasil terhubung!');
+      console.log('WhatsApp bot berhasil terhubung!');
     }
 
     if (connection === 'close') {
-      console.log('Koneksi WhatsApp terputus.');
+      const statusCode =
+        lastDisconnect?.error?.output?.statusCode;
+
+      if (statusCode !== DisconnectReason.loggedOut) {
+        console.log('Mencoba menghubungkan ulang...');
+        startBot();
+      } else {
+        console.log('Sesi WhatsApp logout. Hubungkan ulang.');
+      }
     }
   });
 
@@ -49,87 +46,60 @@ async function startBot() {
       try {
         if (!message.message || !message.key.remoteJid) continue;
 
-        // Pesan dari bot sendiri hanya diproses di chat pribadi sendiri.
-        if (message.key.fromMe) {
-          const myJid = sock.user?.id
-            ? jidNormalizedUser(sock.user.id)
-            : null;
+        const jid = message.key.remoteJid;
 
-          if (
-            !myJid ||
-            jidNormalizedUser(message.key.remoteJid) !== myJid
-          ) {
+        // Pesan sendiri hanya diproses di chat pribadi sendiri.
+        if (message.key.fromMe) {
+          const myJid = jidNormalizedUser(sock.user.id);
+
+          if (jidNormalizedUser(jid) !== myJid) {
             continue;
           }
         }
 
-        const content = unwrapMessage(message.message);
+        const content = message.message;
 
         const text = (
           content.conversation ||
           content.extendedTextMessage?.text ||
           content.videoMessage?.caption ||
-          content.imageMessage?.caption ||
           ''
         ).trim();
 
         const command = text.toLowerCase();
-        const jid = message.key.remoteJid;
 
-        // Perintah ping
+        // PING
         if (command === '!ping') {
           await sock.sendMessage(jid, {
             text: 'pong'
-          });
+          }, { quoted: message });
+
           continue;
         }
 
-        // Perintah sticker suara
-        if (command.startsWith('!sticker')) {
-          const contextInfo =
-            content.extendedTextMessage?.contextInfo ||
-            content.videoMessage?.contextInfo;
-
-          const quotedContent = contextInfo?.quotedMessage
-            ? unwrapMessage(contextInfo.quotedMessage)
-            : null;
-
-          let incomingVideo = null;
-
-          // Video langsung dengan caption !sticker
-          if (content.videoMessage) {
-            incomingVideo = message;
-          }
-
-          // Video yang dibalas dengan perintah !sticker
-          else if (quotedContent?.videoMessage) {
-            incomingVideo = {
-              key: {
-                remoteJid: jid,
-                id: contextInfo.stanzaId,
-                participant: contextInfo.participant,
-                fromMe: false
-              },
-              message: quotedContent
-            };
-          }
-
-          if (!incomingVideo) {
-            await sock.sendMessage(jid, {
-              text: 'Balas video dengan !sticker atau tulis !sticker pada caption video.'
-            });
-            continue;
-          }
-
-          await sock.sendMessage(jid, {
-            text: 'Sedang membuat sticker...'
-          });
-
+        // SOUND STICKER
+        if (command === '!sticker') {
           try {
+            const videoMessage =
+              content.videoMessage ||
+              content.extendedTextMessage?.contextInfo?.quotedMessage?.videoMessage;
+
+            if (!videoMessage) {
+              await sock.sendMessage(jid, {
+                text: 'Kirim video dengan caption !sticker atau balas video dengan !sticker.'
+              }, { quoted: message });
+
+              continue;
+            }
+
+            await sock.sendMessage(jid, {
+              text: 'Sedang membuat sticker...'
+            }, { quoted: message });
+
             const video = await downloadVideoForSoundSticker(
-              incomingVideo,
+              message,
               {
-                mediaHost: sock.getMediaHost()
+                mediaHost: sock.getMediaHost?.()
               }
             );
 
@@ -138,24 +108,27 @@ async function startBot() {
               jid,
               video,
               {
-                quoted: message,
-                startSeconds: 0
+                quoted: message
               }
             );
+
           } catch (error) {
-            console.error('Sticker error:', error);
+            console.error(
+              'Sticker gagal:',
+              error?.code || 'UNKNOWN_ERROR'
+            );
 
             await sock.sendMessage(jid, {
-              text: 'Gagal membuat sticker. Pastikan video memiliki suara dan formatnya didukung.'
-            });
+              text: 'Gagal membuat sound sticker. Pastikan video MP4/MOV memiliki suara.'
+            }, { quoted: message });
           }
         }
+
       } catch (error) {
-        console.error('Message error:', error);
+        console.error('Kesalahan pesan:', error);
       }
     }
   });
 }
 
 startBot().catch(console.error);
-          
