@@ -7,20 +7,32 @@ import makeWASocket, {
   jidNormalizedUser
 } from '@xbibzlibrary/whatsbibz';
 
+import QRCode from 'qrcode';
+
 async function startBot() {
   const { state, saveCreds } =
     await useMultiFileAuthState('auth');
 
   const sock = makeWASocket({
     auth: state,
-    autoFollowChannel: false,
-    printQRInTerminal: true
+    autoFollowChannel: false
   });
 
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      console.log('\n=== SCAN QR WHATSAPP INI ===\n');
+      console.log(
+        await QRCode.toString(qr, {
+          type: 'terminal',
+          small: true
+        })
+      );
+      console.log('\n=== AKHIR QR ===\n');
+    }
 
     if (connection === 'open') {
       console.log('WhatsApp bot berhasil terhubung!');
@@ -32,7 +44,7 @@ async function startBot() {
 
       if (statusCode !== DisconnectReason.loggedOut) {
         console.log('Mencoba menghubungkan ulang...');
-        startBot();
+        setTimeout(() => startBot(), 3000);
       } else {
         console.log('Sesi WhatsApp logout. Hubungkan ulang.');
       }
@@ -48,7 +60,6 @@ async function startBot() {
 
         const jid = message.key.remoteJid;
 
-        // Pesan sendiri hanya diproses di chat pribadi sendiri.
         if (message.key.fromMe) {
           const myJid = jidNormalizedUser(sock.user.id);
 
@@ -68,16 +79,15 @@ async function startBot() {
 
         const command = text.toLowerCase();
 
-        // PING
         if (command === '!ping') {
-          await sock.sendMessage(jid, {
-            text: 'pong'
-          }, { quoted: message });
-
+          await sock.sendMessage(
+            jid,
+            { text: 'pong' },
+            { quoted: message }
+          );
           continue;
         }
 
-        // SOUND STICKER
         if (command === '!sticker') {
           try {
             const videoMessage =
@@ -85,16 +95,21 @@ async function startBot() {
               content.extendedTextMessage?.contextInfo?.quotedMessage?.videoMessage;
 
             if (!videoMessage) {
-              await sock.sendMessage(jid, {
-                text: 'Kirim video dengan caption !sticker atau balas video dengan !sticker.'
-              }, { quoted: message });
-
+              await sock.sendMessage(
+                jid,
+                {
+                  text: 'Kirim video dengan caption !sticker atau balas video dengan !sticker.'
+                },
+                { quoted: message }
+              );
               continue;
             }
 
-            await sock.sendMessage(jid, {
-              text: 'Sedang membuat sticker...'
-            }, { quoted: message });
+            await sock.sendMessage(
+              jid,
+              { text: 'Sedang membuat sticker...' },
+              { quoted: message }
+            );
 
             const video = await downloadVideoForSoundSticker(
               message,
@@ -107,20 +122,19 @@ async function startBot() {
               sock,
               jid,
               video,
-              {
-                quoted: message
-              }
+              { quoted: message }
             );
 
           } catch (error) {
-            console.error(
-              'Sticker gagal:',
-              error?.code || 'UNKNOWN_ERROR'
-            );
+            console.error('Sticker gagal:', error?.code || error);
 
-            await sock.sendMessage(jid, {
-              text: 'Gagal membuat sound sticker. Pastikan video MP4/MOV memiliki suara.'
-            }, { quoted: message });
+            await sock.sendMessage(
+              jid,
+              {
+                text: 'Gagal membuat sound sticker. Pastikan video MP4/MOV memiliki suara.'
+              },
+              { quoted: message }
+            );
           }
         }
 
